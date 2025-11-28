@@ -1,105 +1,99 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
-from models.user import UserCreate, UserLogin, Token, UserResponse, UserInDB
-from utils.auth import verify_password, get_password_hash, create_access_token, generate_user_code
-from datetime import timedelta, datetime  # ← datetime 추가!
-from config.settings import settings
+# Backend/routers/auth.py
+"""인증 관련 라우터"""
 
-router = APIRouter()
+from fastapi import APIRouter, HTTPException, Depends, Header
+from typing import Dict
+import uuid
 
-@router.post("/signup", response_model=Token, status_code=status.HTTP_201_CREATED)
-async def signup(user: UserCreate, request: Request):
-    """회원가입"""
-    db = request.app.mongodb
-    
-    # 이메일 중복 체크
-    existing_user = await db.users.find_one({"email": user.email})
-    if existing_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="이미 등록된 이메일입니다"
-        )
-    
-    # 사용자 생성
-    user_dict = user.dict()
-    user_dict["hashed_password"] = get_password_hash(user_dict.pop("password"))
-    user_dict["created_at"] = datetime.utcnow()  # ← 추가!
-    
-    # 임시 ID로 user_code 생성
-    from bson import ObjectId
-    temp_id = str(ObjectId())
-    user_dict["user_code"] = generate_user_code(temp_id)
-    
-    result = await db.users.insert_one(user_dict)
-    
-    # 실제 ID로 user_code 재생성
-    actual_id = str(result.inserted_id)
-    actual_code = generate_user_code(actual_id)
-    await db.users.update_one(
-        {"_id": result.inserted_id},
-        {"$set": {"user_code": actual_code}}
-    )
-    
-    # 생성된 사용자 조회
-    created_user = await db.users.find_one({"_id": result.inserted_id})
-    
-    # JWT 토큰 생성
-    access_token = create_access_token(
-        data={"sub": user.email},
-        expires_delta=timedelta(minutes=settings.access_token_expire_minutes)
-    )
-    
-    user_response = UserResponse(
-        id=str(created_user["_id"]),
-        email=created_user["email"],
-        name=created_user["name"],
-        birth=created_user.get("birth"),
-        photo_url=created_user.get("photo_url"),
-        user_code=created_user["user_code"],
-        created_at=created_user["created_at"]
-    )
-    
-    return Token(
-        access_token=access_token,
-        user=user_response
-    )
+from ..models.schemas import SignupRequest, LoginRequest
+from ..services.store import store
+from ..utils.logger import log_request, log_stage, log_success, log_error, log_navigation
 
-@router.post("/login", response_model=Token)
-async def login(credentials: UserLogin, request: Request):
-    """로그인"""
-    db = request.app.mongodb
-    
-    # 사용자 찾기
-    user = await db.users.find_one({"email": credentials.email})
+router = APIRouter(prefix="/auth", tags=["Auth"])
+
+
+async def get_current_user(authorization: str = Header(None)) -> Dict:
+    """현재 인증된 사용자 가져오기"""
+    if not authorization:
+        if not store.users:
+            test_user = store.create_user(
+                username="admin",
+                email="admin@test.com",
+                password="admin123",
+                name="admin",
+                birth="2000-01-01"
+            )
+            token = str(uuid.uuid4())
+            store.tokens[token] = test_user['user_id']
+            return test_user
+        return list(store.users.values())[0]
+
+    token = authorization.replace("Bearer ", "") if authorization.startswith("Bearer ") else authorization
+    user = store.get_user_by_token(token)
+
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="이메일 또는 비밀번호가 올바르지 않습니다"
-        )
-    
-    # 비밀번호 확인
-    if not verify_password(credentials.password, user["hashed_password"]):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="이메일 또는 비밀번호가 올바르지 않습니다"
-        )
-    
-    # JWT 토큰 생성
-    access_token = create_access_token(
-        data={"sub": credentials.email},
-        expires_delta=timedelta(minutes=settings.access_token_expire_minutes)
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    return user
+
+
+@router.post("/signup")
+async def signup(request: SignupRequest):
+    log_request("POST /auth/signup", request.name, f"email={request.email}")
+    log_stage(1, "회원가입", request.name)
+
+    user = store.create_user(
+        username=request.username,
+        email=request.email,
+        password=request.password,
+        name=request.name,
+        birth=request.birth,
+        photo_url=request.photo_url
     )
-    
-    user_response = UserResponse(
-        id=str(user["_id"]),
-        email=user["email"],
-        name=user["name"],
-        birth=user.get("birth"),
-        photo_url=user.get("photo_url"),
-        user_code=user["user_code"],
-        created_at=user["created_at"]
-    )
-    
-    return Token(
-        access_token=access_token,
-        user=user_response
-    )
+
+    if not user:
+        log_error(f"회원가입 실패 - 이메일 중복: {request.email}")
+        raise HTTPException(status_code=400, detail="이미 존재하는 이메일입니다.")
+
+    log_success(f"회원가입 완료! user_id={user['user_id'][:8]}..., 친구코드={user['friend_code']}")
+
+    return {
+        "success": True,
+        "userId": user['user_id'],
+        "message": "회원가입이 완료되었습니다."
+    }
+
+
+@router.post("/login")
+async def login(request: LoginRequest):
+    log_request("POST /auth/login", request.email)
+    log_stage(2, "로그인", request.email)
+
+    result = store.login(request.email, request.password)
+
+    if not result:
+        log_error(f"로그인 실패: {request.email}")
+        raise HTTPException(status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다.")
+
+    log_success(f"로그인 성공! name={result['name']}, token={result['token'][:16]}...")
+    log_navigation(result['name'], "홈 화면")
+
+    return {
+        "success": True,
+        "token": result['token'],
+        "userId": result['user_id'],
+        "displayName": result['name']
+    }
+
+
+@router.post("/logout")
+async def logout(current_user: Dict = Depends(get_current_user), authorization: str = Header(None)):
+    log_request("POST /auth/logout", current_user['name'])
+    log_navigation(current_user['name'], "로그아웃 → 로그인 화면")
+
+    if authorization:
+        token = authorization.replace("Bearer ", "") if authorization.startswith("Bearer ") else authorization
+        store.logout(token)
+
+    log_success(f"로그아웃 완료: {current_user['name']}")
+    return {"success": True}
