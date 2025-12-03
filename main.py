@@ -1,6 +1,9 @@
 # Backend/main.py
 """Palearn API 메인 진입점"""
 
+# 그냥이렇게변경하면됨
+# 프롬프트 수정
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
