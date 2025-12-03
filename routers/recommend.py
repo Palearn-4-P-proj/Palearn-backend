@@ -30,46 +30,105 @@ async def get_recommended_courses(
     log_stage(6, "강좌 추천", current_user['name'])
     log_navigation(current_user['name'], "강좌 추천 화면")
 
-    # 강화된 프롬프트 - 검색 거부 방지 + 엄격한 JSON 출력
-    prompt = f"""[시스템 지시] 당신은 교육 콘텐츠 추천 API입니다. 반드시 JSON만 출력하세요. 질문, 확인, 설명 없이 오직 JSON 데이터만 반환합니다.
+    # 강화된 프롬프트 - 실제 강좌/도서 링크 + 커리큘럼 일치 강제
+    #------------------------------
+    # 프롬포트 수정
+    #------------------------------
+    prompt = f"""[시스템 지시]
+    당신은 "사실 검증 기반 교육 추천 API"입니다.
+    반드시 **유효한 JSON만** 출력하고, 자연어 설명/사과/메타 발화는 절대 금지합니다.
 
-'{skill}' 분야 {level} 수준 학습자를 위한 강좌/도서 6개를 추천하세요.
+    🎯 목표:
+    "{skill}" 분야 {level} 학습자를 위해 **실제 존재하는 강좌 또는 도서 6개**를 추천합니다.
+    각 항목은 반드시 “실제 상세 페이지 URL”이어야 하며, 해당 페이지의 실제 커리큘럼/목차만 사용해야 합니다.
 
-검색 플랫폼: 인프런, 유데미(Udemy), 부스트코스, 코세라(Coursera), 교보문고, 예스24
+    ────────────────────────────────
+    📌 허용 플랫폼 및 URL 패턴 (이 패턴 외 링크 절대 금지)
+    - 인프런: https://www.inflearn.com/course/
+    - 유데미: https://www.udemy.com/course/
+    - 클래스101: https://class101.net/products/
+    - 부스트코스: https://www.boostcourse.org/
+    - 코세라: https://www.coursera.org/learn/
+    - 교보문고: https://product.kyobobook.co.kr/detail/
+    - 예스24: https://www.yes24.com/Product/Goods/
+    - 유튜브 단일 강의: https://www.youtube.com/watch?v=
 
-⚠️ 절대 규칙:
-1. JSON 외의 텍스트 출력 금지 (질문, 설명, 확인 요청 금지)
-2. 찾을 수 없다는 응답 금지 - 반드시 6개 추천
-3. example.com URL 사용 금지
-4. 숫자에 쉼표 금지 (1234 형식)
+    ❌ 절대 금지
+    1. 검색 URL  
+    - google.com/search  
+    - search.naver.com  
+    - youtube.com/results  
+    - ?q=, ?search_query= 등  
+    2. example.com 포함 URL  
+    3. 플랫폼 구조에 맞지 않는 URL 생성  
+    4. 상세 페이지가 아닌 카테고리/검색/리스트 페이지  
+    5. 페이지 내용에 없는 커리큘럼 생성  
+    6. JSON 외 텍스트 출력
 
-필수 JSON 형식:
-```json
-{{
-  "recommendations": [
+    ────────────────────────────────
+    🔎 필수 동작
+    1) 웹 브라우징으로 실제 **강좌/도서 상세 페이지**를 찾습니다.  
+    2) 페이지 내 실제 제목, 강사명/저자명, 가격, 소개, 커리큘럼/목차 섹션을 추출합니다.  
+
+    3) curriculum 리스트 작성 규칙:
+    - type이 "course"인 경우:  
+        강좌 상세 페이지에 있는 섹션/차시/모듈 제목을 그대로 사용합니다.
+    - type이 "book"인 경우:  
+        도서 상세 페이지의 **목차(차례)** 또는 장/파트/챕터 제목을 그대로 사용합니다.
+    - curriculum에는 최소 5개 이상의 항목이 있어야 합니다.
+    - 페이지에 커리큘럼/목차 정보가 거의 없다면, 그 도서는 추천하지 말고
+        다른 도서를 선택하여 6개를 채우세요.
+    - 임의로 새 커리큘럼을 상상해서 만들면 안 됩니다.
+
+    4) 링크 유효성 검증 보고(필수):
+    - link_accessible: true/false  
+    - 만약 false일 경우 해당 항목은 제외하고 새로운 항목을 찾아 6개를 반드시 채우세요.
+
+    ────────────────────────────────
+    📊 필수 JSON 형식:
+
+    ```json
     {{
-      "id": "unique_id_1",
-      "title": "강좌/도서 제목",
-      "provider": "플랫폼명",
-      "instructor": "강사/저자명",
-      "type": "course",
-      "weeks": 4,
-      "free": false,
-      "rating": 4.5,
-      "students": "1234명",
-      "summary": "상세 설명 2-3문장",
-      "reason": "{level} 학습자가 {skill} 기초를 다지기에 적합합니다",
-      "curriculum": ["섹션 1: 입문", "1강: 시작하기", "2강: 기초 개념", "3강: 실습", "4강: 심화", "5강: 프로젝트", "6강: 마무리"],
-      "link": "https://www.inflearn.com/course/실제강좌주소",
-      "price": "55000원",
-      "duration": "총 10시간",
-      "level_detail": "{level} 수준"
+    "recommendations": [
+        {{
+        "id": "unique_id_1",
+        "title": "상세 페이지의 실제 제목",
+        "provider": "인프런/유데미/클래스101/교보문고 등",
+        "instructor": "실제 강사명 또는 저자명",
+        "type": "course 또는 book",
+        "weeks": 4,
+        "free": false,
+        "rating": 45,
+        "students": "1234명",
+        "summary": "상세 설명 2-3문장 (실제 소개 내용 기반)",
+        "reason": "{level} 학습자가 {skill}을 학습하기 적합한 이유",
+        "curriculum": [
+            "페이지에 있는 섹션/챕터/목차 제목 그대로",
+            "임의 생성 금지"
+        ],
+        "link": "https://실제-상세페이지-URL",
+        "link_accessible": true,
+        "price": "55000원",
+        "duration": "총 10시간 또는 페이지 기반 정보",
+        "level_detail": "{level} 수준"
+        }}
+    ]
     }}
-  ]
-}}
-```
+    ────────────────────────────────
+    ⚠️ 필수 규칙 (AI는 반드시 지켜야 함)
 
-지금 바로 JSON을 출력하세요:"""
+    6개 모두 link_accessible=true 인 항목만 남겨 최종적으로 6개를 출력합니다.
+
+    모든 추천 항목에서 curriculum 배열은 비어 있으면 안 되며,
+    최소 5개 이상의 항목을 포함해야 합니다.
+
+    type이 "book"인 항목의 curriculum은 반드시 도서 상세 페이지의 목차/챕터 제목을 기반으로 해야 합니다.
+
+    URL 패턴과 맞지 않거나 커리큘럼/목차를 추출할 수 없는 항목은 제외하세요.
+
+    지금부터 위 JSON만 출력하세요.
+    """
+
 
     response = call_gpt(prompt, use_search=True)
     data = extract_json(response)
