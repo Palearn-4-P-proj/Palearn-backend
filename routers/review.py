@@ -44,50 +44,69 @@ async def get_review_materials(
     topics_str = ', '.join(completed_topics)
 
     # Flask 기반 프롬프트 - 복습 자료 검색
+    #------------------------------
+    # 프롬포트 수정
+    #------------------------------
     prompt = f"""
-📖 **어제 학습하신 내용에 대한 복습 자료를 찾아드리겠습니다.**
+    📖 **어제 학습하신 내용에 대한 복습 자료를 찾아드리겠습니다.**
 
-🔍 **검색할 주제**: {topics_str}
+    🔍 **검색할 주제**: {topics_str}
 
-🚨🚨🚨 **절대 금지 사항** 🚨🚨🚨
-- example.com, example.org 등 EXAMPLE이 들어간 모든 URL 절대 사용 금지
-- 존재하지 않는 가상의 자료 생성 금지
-- 반드시 실제 접근 가능한 URL만 제공
+    🚨🚨🚨 **절대 금지 사항** 🚨🚨🚨
+    - example.com, example.org 등 EXAMPLE 포함 URL 절대 금지
+    - 존재하지 않는 가짜 자료 생성 금지
+    - **검색 결과 페이지 금지:** google.com/search, search.naver.com, youtube.com/results
+    - **채널/목록/카테고리 페이지 금지:** /channel/, /playlist/, /tag/, /topics/, /category/ 등
+    - **URL을 규칙으로 조합하여 생성 금지**
+    - (예: 도메인 + 제목으로 URL을 만들어 내면 안 됨)
+    - description 안에 **http, https, www, .com, .org, youtu, []() 링크 표현** 금지
 
-📚 **검색 대상**:
-- 유튜브 강의 영상
-- 기술 블로그 (velog, tistory, medium 등)
-- 공식 문서
-- 온라인 강좌 (인프런, 유데미 등)
+    📌 **URL 검증 강화 규칙**
+    - 웹 브라우징을 사용하여 실제 페이지를 연 후,  
+    **브라우저 주소창에 표시되는 URL만 그대로 사용**
+    - 다음과 같은 경우 해당 자료는 버리고 새 자료를 찾을 것:
+    - 404, 500, “페이지를 찾을 수 없습니다”, “존재하지 않는 페이지”
+    - 내용이 거의 없는 비정상 페이지
+    - 무한 리다이렉트가 발생하는 페이지
+    - 유튜브는 반드시 개별 영상 URL만 사용 (watch?v= 또는 youtu.be/)
 
-⚠️ **필수 출력 형식** (JSON):
-```json
-{{
-  "materials": [
+    📚 **검색 대상**:
+    - 유튜브 강의 영상 (watch?v=… 또는 youtu.be/)
+    - 기술 블로그 글 (velog, tistory, medium 등)
+    - 공식 문서 (특정 기능·개념의 상세 문서 페이지)
+    - 강의 상세 페이지 (인프런, 유데미 등)
+
+    ⚠️ **필수 출력 형식** (JSON):
+    ```json
     {{
-      "title": "자료 제목",
-      "type": "유튜브",
-      "url": "https://실제URL",
-      "description": "이 자료가 복습에 도움이 되는 이유",
-      "duration": "영상 길이 또는 예상 학습 시간"
-    }},
-    {{
-      "title": "자료 제목",
-      "type": "블로그",
-      "url": "https://실제URL",
-      "description": "이 자료가 복습에 도움이 되는 이유",
-      "duration": "예상 읽기 시간"
+    "materials": [
+        {{
+        "title": "자료 제목",
+        "type": "유튜브",
+        "url": "https://실제URL",
+        "description": "이 자료가 복습에 도움이 되는 이유 (URL 없이 한국어 1~2문장)",
+        "duration": "영상 길이 또는 예상 학습 시간"
+        }},
+        {{
+        "title": "자료 제목",
+        "type": "블로그",
+        "url": "https://실제URL",
+        "description": "이 자료가 복습에 도움이 되는 이유 (URL 없이 한국어 1~2문장)",
+        "duration": "예상 읽기 시간"
+        }}
+    ]
     }}
-  ]
-}}
-```
+    ```
 
-📌 **요청사항**:
-- 총 5개의 복습 자료 추천
-- 유튜브 영상 2개, 블로그/문서 2개, 기타(강좌/도서) 1개
-- 각 자료에 대해 왜 복습에 도움이 되는지 description 포함
-- 반드시 한국어 또는 영어로 된 실제 자료
-"""
+    📌 요청사항:
+    - 총 5개의 복습 자료 추천
+    1. 유튜브 2개
+    2. 블로그/문서 2개
+    3. 기타(강좌/도서) 1개
+    - title, description은 모두 한국어
+    - URL은 반드시 실제로 접속되는 상세 페이지만 사용
+    - description에는 URL·도메인·링크 표현 금지
+    """
 
     response = call_gpt(prompt, use_search=True)
     data = extract_json(response)
